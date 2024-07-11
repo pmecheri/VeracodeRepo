@@ -1,0 +1,86 @@
+trigger:
+- VPANET
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  system.debug: true
+  solution: '*.sln'  # Assuming your C# project solution file is named *.sln
+  buildPlatform: 'Any CPU'
+  buildConfiguration: 'Debug'  # You can change this to 'Release' for a release build
+  veracodeAppProfile: '$(System.TeamProject)'  # Veracode application profile name
+  veracodeSandboxName: 'ENGTESTING_1'  # Veracode sandbox name (replace if needed)
+
+stages:
+- stage: Build_and_Publish
+  jobs:
+  - job: Build_and_Publish_Job
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '16.x'
+      displayName: 'Use Node.js 16.x'
+    - script: |
+        echo 'Node version => ' && node -v
+        echo 'NPM version => ' && npm -v
+      displayName: 'Verify Node.js and npm version'
+    - task: UseDotNet@2  # Use the latest version of .NET Core task
+      inputs:
+        version: '7.0.x'  # Replace with the desired .NET version
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'restore'
+        projects: '**/*.csproj'  # Adjust the pattern to match your project file(s)
+        feedsToUse: 'select'  # Use only the feeds specified in the NuGet.config file, typically found in the solution directory
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'build'
+        projects: '**/*.csproj'  # Adjust the pattern to match your project file(s)
+        arguments: '--configuration Debug'  # Optionally specify build configuration
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        arguments: '--configuration $(buildConfiguration)'  # Optionally specify build configuration
+        zipAfterPublish: false
+    
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: '$(Build.SourcesDirectory)/ENGTest/bin/publish' # Specify the source folder where the artifacts are published
+        Contents: '**'  # Copy all files and subfolders
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'  # Specify the target folder in the artifact staging directory
+
+    - task: Veracode@3
+      displayName: 'Upload And Scan'
+      inputs:
+        ConnectionDetailsSelection: 'Credentials'
+        apiId: '6a3477f552f56792af7ff5bb47e33922'
+        apiKey: '27a31410a9df84728d1d1bcf0b047358ef6c03f45da17f2b6645c781c32e2cddb23594666bd516a61dc8e420a08434029e2c9995c5c32a3bb573bddbdedde8cf'
+        veracodeAppProfile: '$(veracodeAppProfile)'
+        version: '$(Build.BuildNumber)'  # Use build number as version
+        filepath: '$(Build.ArtifactStagingDirectory)'
+        maximumWaitTime: '360'  # Optional, maximum wait time for scan (minutes)
+        importResults: true
+        createProfile: true
+        sandboxName: '$(veracodeSandboxName)'
+        createSandBox: true  # Create sandbox if it doesn't exist
+
+    - task: Veracode Flaw Importer@3  # Job for importing flaws
+      displayName: 'Import Flaws'
+      inputs:
+        ConnectionDetailsSelection: 'Credentials'
+        apiId: '6a3477f552f56792af7ff5bb47e33922'
+        apiKey: '27a31410a9df84728d1d1bcf0b047358ef6c03f45da17f2b6645c781c32e2cddb23594666bd516a61dc8e420a08434029e2c9995c5c32a3bb573bddbdedde8cf'
+        veracodeAppProfile: '$(veracodeAppProfile)'
+        sandboxName: '$(veracodeSandboxName)'
+        scanType: 'Dynamic, Static, SCA'  # Specify scan types to import flaws from
+        importType: 'All Unmitigated Flaws'  # Import all unmitigated flaws
+        workItemType: 'Bug'  # Change to your desired work item type (e.g., Issue)
+        area: '$(System.TeamProject)'  # Import flaws to this area in Azure DevOps
+        overwriteAreaPathInWorkItemsOnImport: true
+        iterationPath: '$(System.TeamProject)'  # Import flaws to this iteration
+        overwriteIterationPath: true
+        addCustomTag: 'KYAML2'  # Optional, add a custom tag
+        flawImportLimit: '1000'  # Optional, limit on the number of flaws to import
